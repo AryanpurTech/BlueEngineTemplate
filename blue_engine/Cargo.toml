@@ -1,0 +1,82 @@
+[package]
+name = "blue_engine"
+version = "0.4.16"
+authors = ["Elham Aryanpur <elhamaryanpur5@gmail.com>"]
+edition = "2021"
+description = "General-Purpose, Easy-to-use, Fast, and Portable graphics engine"
+documentation = "https://aryanpurtech.github.io/BlueEngineDocs/"
+repository = "https://github.com/AryanpurTech/BlueEngine"
+keywords = ["gamedev", "graphics", "3D", "2D"]
+categories = ["game-development", "gui", "graphics", "rendering"]
+license = "Apache-2.0"
+resolver = "2"
+
+[lib]
+name = "blue_engine"
+crate-type = ["dylib"]
+
+[features]
+default = ["model_loader", "debug"]
+debug = ["dep:env_logger"]
+android = ["dep:log", "dep:android_logger"]
+NON_FILL_POLYGON_MODE = []
+model_loader = ["dep:gltf"]
+
+[dependencies]
+image = { version = "0.24.3" }
+futures = "0.3.21"
+winit = "0.27.2"
+bytemuck = { version = "1.12.1", features = ["derive"] }
+winit_input_helper = "0.13.0"
+anyhow = "1.0.57"
+wgpu = { version = "0.14.0" }
+downcast = "0.11.0"
+nalgebra-glm = "0.17.0"
+# debug logs
+env_logger = { version = "0.10.0", optional = true }
+# model_loader
+gltf = { version = "1.0.0", optional = true }
+# android
+log = { version = "0.4.17", optional = true }
+android_logger = { version = "0.11.1", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "0.14.0", features = ["webgl"] }
+
+# ========== EXAMPLES ========== #
+
+# SHAPES
+[[example]]
+name = "triangle"
+path = "examples/shapes/triangle.rs"
+
+[[example]]
+name = "square"
+path = "examples/shapes/square.rs"
+
+[[example]]
+name = "cube"
+path = "examples/shapes/cube.rs"
+
+# CAMERA
+[[example]]
+name = "rotate_around"
+path = "examples/camera/rotate_around.rs"
+
+[[example]]
+name = "fly_camera"
+path = "examples/camera/fly_camera.rs"
+
+# GUI
+[[example]]
+name = "hello_gui"
+path = "examples/gui/hello_gui.rs"
+
+[[example]]
+name = "styling_gui"
+path = "examples/gui/styling.rs"
+
+# Development ONLY
+[[example]]
+name = "dev"
+path = "examples/dev/dev.rs"

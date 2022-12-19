@@ -1,0 +1,13 @@
+[package]
+name = "blue_engine_template"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+blue_engine = { path = "./blue_engine" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+overflow-checks = false
