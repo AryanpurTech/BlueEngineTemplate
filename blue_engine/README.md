@@ -14,18 +14,16 @@ Hello World:
 
 ```rust
 use blue_engine::{
-    header::{
-        Engine, ObjectSettings, WindowDescriptor
-    },
+    header::{ Engine, ObjectSettings },
     primitive_shapes::triangle
 };
 
 fn main() {
     // initialize the engine
-    let mut engine = Engine::new(WindowDescriptor::default()).expect("win");
+    let mut engine = Engine::new().expect("engine couldn't be initialized");
 
     // create a triangle
-    triangle("my triangle", ObjectSettings::default(), &mut engine).unwrap();
+    triangle("my triangle", ObjectSettings::default(), &mut engine.renderer, &mut engine.objects).unwrap();
 
     // run the engine
     engine
@@ -36,8 +34,17 @@ fn main() {
 
 * [Join our discord server](https://discord.gg/s7xsj9q)
 
-* [WIP] [Documentation](https://aryanpurtech.github.io/BlueEngineDocs/)
+* [WIP] [Guide](https://aryanpurtech.github.io/BlueEngineDocs/)
+
+* Check out the [workflow](https://github.com/orgs/AryanpurTech/projects/2) for roadmap, status, ...
 
 * Check out the [examples](https://github.com/AryanpurTech/BlueEngine/tree/master/examples) folder to get a sense of how things are done
 
-*the credits to the image on top is by NotPB*
+* Check out the [utilities library](https://github.com/AryanpurTech/BlueEngineUtilities) for extra functionality with the engine
+
+* Check out the [editor](https://github.com/rustylabs/blue_flame)
+
+*the credits to the image on top: NotPB*
+
+
+*the development might seem slow sometimes, its due to multiple repositories being handled and due to my education taking a large chunk of my time. The project isn't dead, just slow.*

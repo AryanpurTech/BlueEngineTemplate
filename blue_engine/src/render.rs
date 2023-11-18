@@ -5,8 +5,9 @@
 */
 
 use crate::{
-    header::{uniform_type, Camera, Object, Renderer, ShaderSettings, TextureData},
+    header::{uniform_type, Camera, Renderer, ShaderSettings, TextureData},
     utils::default_resources::{DEFAULT_COLOR, DEFAULT_MATRIX_4, DEFAULT_SHADER, DEFAULT_TEXTURE},
+    ObjectStorage, PipelineData,
 };
 use anyhow::Result;
 use wgpu::Features;
@@ -22,17 +23,26 @@ fn get_render_features() -> Features {
 }
 
 impl Renderer {
+    /// Creates a new renderer.
+    ///
+    /// # Arguments
+    /// * `window` - The window to create the renderer for.
+    /// * `power_preference` - The power preference to use.
     pub(crate) async fn new(
         window: &Window,
         power_preference: crate::PowerPreference,
+        backends: crate::Backends,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
-        let instance = wgpu::Instance::new(wgpu::Backends::all());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
 
         #[cfg(not(feature = "android"))]
-        let surface = Some(unsafe { instance.create_surface(window) });
+        let surface = Some(unsafe { instance.create_surface(window) }.unwrap());
         #[cfg(feature = "android")]
         let surface = None;
 
@@ -40,7 +50,7 @@ impl Renderer {
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: power_preference,
                 #[cfg(not(feature = "android"))]
-                compatible_surface: Some(surface.as_ref().unwrap()),
+                compatible_surface: Some(&surface.as_ref().unwrap()),
                 #[cfg(feature = "android")]
                 compatible_surface: surface,
                 force_fallback_adapter: false,
@@ -61,7 +71,8 @@ impl Renderer {
             .unwrap();
 
         #[cfg(not(feature = "android"))]
-        let tex_format = surface.as_ref().unwrap().get_supported_formats(&adapter)[0];
+        let tex_format = surface.as_ref().unwrap().get_capabilities(&adapter).formats[0];
+
         #[cfg(feature = "android")]
         let tex_format = wgpu::TextureFormat::Rgba8UnormSrgb;
 
@@ -81,6 +92,7 @@ impl Renderer {
             #[cfg(not(feature = "android"))]
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![tex_format],
         };
         #[cfg(not(feature = "android"))]
         surface.as_ref().unwrap().configure(&device, &config);
@@ -145,7 +157,6 @@ impl Renderer {
 
             default_data: None,
             camera: None,
-            custom_render_pass: None,
         };
 
         let default_texture = renderer.build_texture(
@@ -177,6 +188,9 @@ impl Renderer {
         Ok(renderer)
     }
 
+    /// Resize the window.
+    /// # Arguments
+    /// * `new_size` - The new window size.
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.size = new_size;
         self.config.width = new_size.width;
@@ -193,9 +207,14 @@ impl Renderer {
         }
     }
 
+    /// Render the scene. Returns the command encoder, the texture view, and the surface texture.
+    ///
+    /// # Arguments
+    /// * `objects` - The object storage.
+    /// * `camera` - The camera.
     pub(crate) fn pre_render(
         &mut self,
-        objects: &std::collections::HashMap<&'static str, Object>,
+        objects: &ObjectStorage,
         camera: &Camera,
     ) -> Result<
         Option<(
@@ -251,25 +270,58 @@ impl Renderer {
         render_pass.set_pipeline(&default_data.1);
         render_pass.set_bind_group(1, &camera.uniform_data, &[]);
 
-        for i in objects.iter() {
-            let i = i.1;
-            render_pass.set_pipeline(&i.pipeline.shader);
-            render_pass.set_bind_group(0, &i.pipeline.texture, &[]);
-            if i.pipeline.uniform.is_some() {
-                render_pass.set_bind_group(2, &i.pipeline.uniform.as_ref().unwrap(), &[]);
+        // sort the object list in descending render order
+        let mut object_list: Vec<_> = objects.iter().collect();
+        object_list.sort_by(|(_, a), (_, b)| a.render_order.cmp(&b.render_order).reverse());
+
+        for (_, i) in object_list {
+            if i.is_visible {
+                let i = i;
+
+                let vertex_buffer = get_pipeline_vertex_buffer(&i.pipeline.vertex_buffer, objects);
+                let shader = get_pipeline_shader(&i.pipeline.shader, objects);
+                let texture = get_pipeline_texture(&i.pipeline.texture, objects);
+                let uniform = get_pipeline_uniform_buffer(&i.pipeline.uniform, objects);
+
+                // vertex
+                if vertex_buffer.is_some() {
+                    let vertex_buffer = vertex_buffer.unwrap();
+                    render_pass.set_vertex_buffer(0, vertex_buffer.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, i.instance_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        vertex_buffer.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+
+                    // shader
+                    if shader.is_some() {
+                        render_pass.set_pipeline(&shader.unwrap());
+                    }
+                    // texture
+                    if texture.is_some() {
+                        render_pass.set_bind_group(0, &texture.unwrap(), &[]);
+                    }
+                    // uniform
+                    if uniform.is_some() {
+                        let uniform = uniform.unwrap();
+                        if uniform.is_some() {
+                            render_pass.set_bind_group(2, uniform.as_ref().unwrap(), &[]);
+                        }
+                    }
+                    render_pass.draw_indexed(0..vertex_buffer.length, 0, 0..i.instances.len() as _);
+                }
             }
-            render_pass.set_vertex_buffer(0, i.pipeline.vertex_buffer.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(
-                i.pipeline.vertex_buffer.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
-            render_pass.draw_indexed(0..i.pipeline.vertex_buffer.length, 0, 0..1);
         }
         drop(render_pass);
 
         Ok(Some((encoder, view, frame)))
     }
 
+    /// Render the scene.
+    ///
+    /// # Arguments
+    /// * `encoder` - The command encoder.
+    /// * `frame` - The surface texture.
     pub(crate) fn render(
         &mut self,
         encoder: wgpu::CommandEncoder,
@@ -280,5 +332,80 @@ impl Renderer {
         frame.present();
 
         Ok(())
+    }
+}
+
+// =========================== Extract Pipeline Data ===========================
+// I couldn't make them into one function, so here they are, four of them
+
+/// Get the pipeline vertex buffer.
+fn get_pipeline_vertex_buffer<'a>(
+    data: &'a PipelineData<crate::VertexBuffers>,
+    objects: &'a ObjectStorage,
+) -> Option<&'a crate::VertexBuffers> {
+    match data {
+        PipelineData::Copy(object_id) => {
+            let data = objects.get(object_id.as_str());
+            if data.is_some() {
+                get_pipeline_vertex_buffer(&data.unwrap().pipeline.vertex_buffer, objects)
+            } else {
+                None
+            }
+        }
+        PipelineData::Data(data) => Some(data),
+    }
+}
+
+/// Get the pipeline shader.
+fn get_pipeline_shader<'a>(
+    data: &'a PipelineData<crate::Shaders>,
+    objects: &'a ObjectStorage,
+) -> Option<&'a crate::Shaders> {
+    match data {
+        PipelineData::Copy(object_id) => {
+            let data = objects.get(object_id.as_str());
+            if data.is_some() {
+                get_pipeline_shader(&data.unwrap().pipeline.shader, objects)
+            } else {
+                None
+            }
+        }
+        PipelineData::Data(data) => Some(data),
+    }
+}
+
+/// Get the pipeline texture.
+fn get_pipeline_texture<'a>(
+    data: &'a PipelineData<crate::Textures>,
+    objects: &'a ObjectStorage,
+) -> Option<&'a crate::Textures> {
+    match data {
+        PipelineData::Copy(object_id) => {
+            let data = objects.get(object_id.as_str());
+            if data.is_some() {
+                get_pipeline_texture(&data.unwrap().pipeline.texture, objects)
+            } else {
+                None
+            }
+        }
+        PipelineData::Data(data) => Some(data),
+    }
+}
+
+/// Get the pipeline uniform_buffer.
+fn get_pipeline_uniform_buffer<'a>(
+    data: &'a PipelineData<Option<crate::UniformBuffers>>,
+    objects: &'a ObjectStorage,
+) -> Option<&'a Option<crate::UniformBuffers>> {
+    match data {
+        PipelineData::Copy(object_id) => {
+            let data = objects.get(object_id.as_str());
+            if data.is_some() {
+                get_pipeline_uniform_buffer(&data.unwrap().pipeline.uniform, objects)
+            } else {
+                None
+            }
+        }
+        PipelineData::Data(data) => Some(data),
     }
 }

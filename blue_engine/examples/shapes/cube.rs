@@ -4,15 +4,12 @@
  * The license is same as the one on the root.
 */
 
-use blue_engine::{
-    header::{Engine, WindowDescriptor},
-    primitive_shapes::cube,
-};
+use blue_engine::{header::Engine, primitive_shapes::cube};
 
 fn main() {
-    let mut engine = Engine::new(WindowDescriptor::default()).expect("win");
+    let mut engine = Engine::new().expect("win");
 
-    cube("Cube", &mut engine).unwrap();
+    cube("Cube", &mut engine.renderer, &mut engine.objects).unwrap();
     engine
         .objects
         .get_mut("Cube")

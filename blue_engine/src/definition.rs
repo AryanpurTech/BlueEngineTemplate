@@ -7,9 +7,12 @@
 use image::GenericImageView;
 use wgpu::{util::DeviceExt, BindGroupLayout, Sampler, Texture, TextureView};
 
-use crate::header::{
-    Pipeline, ShaderSettings, Shaders, TextureData, TextureMode, Textures, UniformBuffers, Vertex,
-    VertexBuffers,
+use crate::{
+    header::{
+        Pipeline, PipelineData, ShaderSettings, Shaders, StringBuffer, TextureData, TextureMode,
+        Textures, UniformBuffers, Vertex, VertexBuffers,
+    },
+    InstanceRaw,
 };
 
 impl crate::header::Renderer {
@@ -22,17 +25,17 @@ impl crate::header::Renderer {
         uniform: Option<UniformBuffers>,
     ) -> Result<Pipeline, anyhow::Error> {
         Ok(Pipeline {
-            shader,
-            vertex_buffer,
-            texture,
-            uniform,
+            shader: PipelineData::Data(shader),
+            vertex_buffer: PipelineData::Data(vertex_buffer),
+            texture: PipelineData::Data(texture),
+            uniform: PipelineData::Data(uniform),
         })
     }
 
     /// Creates a shader group, the input must be spir-v compiled vertex and fragment shader
     pub fn build_shader(
         &mut self,
-        name: &str,
+        name: impl StringBuffer,
         shader_source: String,
         uniform_layout: Option<&BindGroupLayout>,
         settings: ShaderSettings,
@@ -40,7 +43,7 @@ impl crate::header::Renderer {
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(format!("{} Shader", name).as_str()),
+                label: Some(format!("{} Shader", name.as_str()).as_str()),
                 source: wgpu::ShaderSource::Wgsl(shader_source.into()),
             });
 
@@ -63,12 +66,12 @@ impl crate::header::Renderer {
         let render_pipeline = self
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(name),
+                label: Some(name.as_str()),
                 layout: Some(&render_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: "vs_main",
-                    buffers: &[Vertex::desc()],
+                    buffers: &[Vertex::desc(), InstanceRaw::desc()],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -76,7 +79,7 @@ impl crate::header::Renderer {
                     targets: &[Some(wgpu::ColorTargetState {
                         format: self.config.format,
                         write_mask: wgpu::ColorWrites::ALL,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -110,7 +113,7 @@ impl crate::header::Renderer {
     /// Creates a new texture data
     pub fn build_texture(
         &mut self,
-        name: &'static str,
+        name: impl StringBuffer,
         texture_data: TextureData,
         texture_mode: TextureMode,
         //texture_format: TextureFormat,
@@ -131,10 +134,10 @@ impl crate::header::Renderer {
 
         let img = match texture_data {
             TextureData::Bytes(data) => image::load_from_memory(data.as_slice())
-                .expect(format!("Couldn't Load Image For Texture Of {}", name).as_str()),
+                .expect(format!("Couldn't Load Image For Texture Of {}", name.as_str()).as_str()),
             TextureData::Image(data) => data,
             TextureData::Path(path) => image::open(path)
-                .expect(format!("Couldn't Load Image For Texture Of {}", name).as_str()),
+                .expect(format!("Couldn't Load Image For Texture Of {}", name.as_str()).as_str()),
         };
 
         let rgba = img.to_rgba8();
@@ -146,13 +149,17 @@ impl crate::header::Renderer {
             depth_or_array_layers: 1,
         };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(name),
+            label: Some(name.as_str()),
             size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
 
         self.queue.write_texture(
@@ -165,8 +172,8 @@ impl crate::header::Renderer {
             &rgba,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: std::num::NonZeroU32::new(4 * dimensions.0),
-                rows_per_image: std::num::NonZeroU32::new(dimensions.1),
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
             },
             size,
         );
@@ -201,7 +208,7 @@ impl crate::header::Renderer {
     }
 
     pub(crate) fn build_depth_buffer(
-        label: &str,
+        label: impl StringBuffer,
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
     ) -> (Texture, TextureView, Sampler) {
@@ -211,13 +218,14 @@ impl crate::header::Renderer {
             depth_or_array_layers: 1,
         };
         let desc = wgpu::TextureDescriptor {
-            label: Some(label),
+            label: Some(label.as_str()),
             size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: crate::DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[wgpu::TextureFormat::Depth32Float],
         };
         let texture = device.create_texture(&desc);
 
@@ -230,7 +238,7 @@ impl crate::header::Renderer {
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Nearest,
             compare: Some(wgpu::CompareFunction::LessEqual),
-            lod_min_clamp: -100.0,
+            lod_min_clamp: 0.0,
             lod_max_clamp: 100.0,
             ..Default::default()
         });
@@ -238,14 +246,17 @@ impl crate::header::Renderer {
         return (texture, view, sampler);
     }
 
+    /// Creates a new uniform buffer part
+    ///
+    /// This function doesn't build the entire uniform buffers list, but rather only one of them
     pub fn build_uniform_buffer_part<T: bytemuck::Zeroable + bytemuck::Pod>(
         &self,
-        name: &str,
+        name: impl StringBuffer,
         value: T,
     ) -> wgpu::Buffer {
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(name),
+                label: Some(name.as_str()),
                 contents: bytemuck::cast_slice(&[value]),
                 usage: wgpu::BufferUsages::UNIFORM,
             })
@@ -258,46 +269,7 @@ impl crate::header::Renderer {
     ) -> Result<(UniformBuffers, BindGroupLayout), anyhow::Error> {
         let mut buffer_entry = Vec::<wgpu::BindGroupEntry>::new();
         let mut buffer_layout = Vec::<wgpu::BindGroupLayoutEntry>::new();
-        /*for i in uniforms.iter() {
-            match i {
-                UniformBuffer::Matrix(name, value) => {
-                    buffer_vec.push(self.device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some(*name),
-                            contents: bytemuck::cast_slice(&[*value]),
-                            usage: wgpu::BufferUsages::UNIFORM,
-                        },
-                    ));
-                }
-                UniformBuffer::Array3(name, value) => {
-                    buffer_vec.push(self.device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some(*name),
-                            contents: bytemuck::cast_slice(&[*value]),
-                            usage: wgpu::BufferUsages::UNIFORM,
-                        },
-                    ));
-                }
-                UniformBuffer::Array4(name, value) => {
-                    buffer_vec.push(self.device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some(*name),
-                            contents: bytemuck::cast_slice(&[*value]),
-                            usage: wgpu::BufferUsages::UNIFORM,
-                        },
-                    ));
-                }
-                UniformBuffer::Float(name, value) => {
-                    buffer_vec.push(self.device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some(*name),
-                            contents: bytemuck::cast_slice(&[*value]),
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                }
-            }
-        } */
+
         for i in 0..uniforms.len() {
             let descriptor = wgpu::BindGroupEntry {
                 binding: i as u32,
@@ -335,8 +307,8 @@ impl crate::header::Renderer {
     /// Creates a new vertex buffer and indecies
     pub fn build_vertex_buffer(
         &mut self,
-        verticies: Vec<Vertex>,
-        indicies: Vec<u16>,
+        verticies: &Vec<Vertex>,
+        indicies: &Vec<u16>,
     ) -> Result<VertexBuffers, anyhow::Error> {
         let vertex_buffer = self
             .device
@@ -359,5 +331,15 @@ impl crate::header::Renderer {
             index_buffer,
             length: indicies.len() as u32,
         })
+    }
+
+    /// Creates a new instance buffer for the object
+    pub fn build_instance(&self, instance_data: Vec<InstanceRaw>) -> wgpu::Buffer {
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
     }
 }

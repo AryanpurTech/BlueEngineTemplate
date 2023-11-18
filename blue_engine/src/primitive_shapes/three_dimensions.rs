@@ -1,8 +1,13 @@
-use crate::{Engine, ObjectSettings, Vertex};
+use crate::{ObjectSettings, ObjectStorage, Renderer, StringBuffer, Vertex};
 
-pub fn cube(name: &'static str, engine: &mut Engine) -> anyhow::Result<()> {
-    engine.new_object(
-        name,
+/// Creates a 3D cube
+pub fn cube(
+    name: impl StringBuffer,
+    renderer: &mut Renderer,
+    objects: &mut ObjectStorage,
+) -> anyhow::Result<()> {
+    objects.new_object(
+        name.clone(),
         vec![
             // Front Face
             Vertex {
@@ -139,20 +144,24 @@ pub fn cube(name: &'static str, engine: &mut Engine) -> anyhow::Result<()> {
             16, 17, 18, 18, 19, 16, // front
             20, 21, 22, 22, 23, 20, // back
         ],
-        ObjectSettings {
-            name,
-            ..Default::default()
-        },
+        ObjectSettings::default(),
+        renderer,
     )?;
 
     Ok(())
 }
 
+/// Create a 3D UV Sphere
+///
+/// ```
 /// details = (stacks, sectors, radius)
+/// example = (18, 36, 1f32)
+/// ```
 pub fn uv_sphere(
-    name: &'static str,
-    engine: &mut Engine,
+    name: impl StringBuffer,
     details: (usize, usize, f32),
+    renderer: &mut Renderer,
+    objects: &mut ObjectStorage,
 ) -> anyhow::Result<()> {
     let sectors = details.1 as f32;
     let stacks = details.0 as f32;
@@ -199,14 +208,12 @@ pub fn uv_sphere(
         }
     }
 
-    engine.new_object(
-        name,
+    objects.new_object(
+        name.clone(),
         vertices,
         indices,
-        ObjectSettings {
-            name,
-            ..Default::default()
-        },
+        ObjectSettings::default(),
+        renderer,
     )?;
 
     Ok(())

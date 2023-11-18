@@ -5,13 +5,13 @@
 */
 
 use blue_engine::{
-    header::{Engine, ObjectSettings, ShaderSettings, WindowDescriptor},
+    header::{Engine, ObjectSettings, ShaderSettings},
     primitive_shapes::square,
 };
 
 fn main() {
     // Create the engine
-    let mut engine = Engine::new(WindowDescriptor::default()).expect("win");
+    let mut engine = Engine::new().expect("win");
 
     // create a square
     square(
@@ -19,7 +19,6 @@ fn main() {
         "Rotating Square",
         ObjectSettings {
             // and set the size
-            size: (500f32, 500f32, 1f32),
             // we need it to not cull it's back face so that it's visible on both side
             shader_settings: ShaderSettings {
                 cull_mode: None,
@@ -28,7 +27,8 @@ fn main() {
             // and have default settings for the rest
             ..Default::default()
         },
-        &mut engine,
+        &mut engine.renderer,
+        &mut engine.objects,
     )
     .unwrap();
 

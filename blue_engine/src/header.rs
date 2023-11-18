@@ -4,12 +4,31 @@
  * The license is Apache-2.0
 */
 
+/// re-exports from dependencies that are useful
 pub mod imports;
+/// few commonly used uniform buffer structures
 pub mod uniform_buffer;
 pub use imports::*;
 pub use uniform_buffer::*;
 
 use downcast::{downcast, Any};
+
+macro_rules! impl_deref {
+    ($struct:ty,$type:ty) => {
+        impl std::ops::Deref for $struct {
+            type Target = $type;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+        impl std::ops::DerefMut for $struct {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+    };
+}
 
 /// Will contain all details about a vertex and will be sent to GPU
 // Will be turned to C code and sent to GPU
@@ -48,32 +67,48 @@ impl Vertex {
         }
     }
 }
+unsafe impl Send for Vertex {}
+unsafe impl Sync for Vertex {}
 
 /// Objects make it easier to work with Blue Engine, it automates most of work needed for
 /// creating 3D objects and showing them on screen. A range of default objects are available
 /// as well as ability to customize each of them and even create your own! You can also
 /// customize almost everything there is about them!
+#[derive(Debug)]
 pub struct Object {
     /// Give your object a name, which can help later on for debugging.
-    pub name: &'static str,
+    pub name: String,
     /// A list of Vertex
     pub vertices: Vec<Vertex>,
     /// A list of indices that dictates the order that vertices appear
     pub indices: Vec<u16>,
+    /// Describes how to uniform buffer is structures
     pub uniform_layout: wgpu::BindGroupLayout,
     /// Pipeline holds all the data that is sent to GPU, including shaders and textures
     pub pipeline: Pipeline,
+    /// List of instances of this object
+    pub instances: Vec<Instance>,
+    /// instance buffer
+    pub instance_buffer: wgpu::Buffer,
     /// Dictates the size of your object in pixels
-    pub size: (f32, f32, f32),
-    pub scale: (f32, f32, f32),
+    pub size: glm::Vec3,
+    /// Dictates the scale of your object. Which by default it's 1,1,1 where the screen is size of 2
+    pub scale: glm::Vec3,
     /// Dictates the position of your object in pixels
-    pub position: (f32, f32, f32),
-    pub rotation: (f32, f32, f32),
+    pub position: glm::Vec3,
+    /// Dictates the rotation of your object
+    pub rotation: glm::Vec3,
     // flags the object to be updated until next frame
     pub(crate) changed: bool,
-    /// Transformation matrix helps to apply changes to your object, including position, orientation, ...
+    /// Transformation matricies helps to apply changes to your object, including position, orientation, ...
     /// Best choice is to let the Object system handle it
-    pub transformation_matrix: nalgebra_glm::Mat4,
+    pub position_matrix: nalgebra_glm::Mat4,
+    /// Transformation matricies helps to apply changes to your object, including position, orientation, ...
+    /// Best choice is to let the Object system handle it
+    pub scale_matrix: nalgebra_glm::Mat4,
+    /// Transformation matricies helps to apply changes to your object, including position, orientation, ...
+    /// Best choice is to let the Object system handle it
+    pub rotation_matrix: nalgebra_glm::Mat4,
     /// Transformation matrix, but inversed
     pub inverse_transformation_matrix: crate::uniform_type::Matrix,
     /// The main color of your object
@@ -88,20 +123,17 @@ pub struct Object {
     pub camera_effect: bool,
     /// Uniform Buffers to be sent to GPU
     pub uniform_buffers: Vec<wgpu::Buffer>,
+    /// Should be rendered or not
+    pub is_visible: bool,
+    /// Objects with higher number get rendered later and appear "on top" when occupying the same space
+    pub render_order: usize,
 }
+unsafe impl Send for Object {}
+unsafe impl Sync for Object {}
 
 /// Extra settings to customize objects on time of creation
 #[derive(Debug, Clone, Copy)]
 pub struct ObjectSettings {
-    /// Give your object a name, which can help later on for debugging.
-    pub name: &'static str,
-    /// Dictates the size of your object in pixels
-    pub size: (f32, f32, f32),
-    pub scale: (f32, f32, f32),
-    /// Dictates the position of your object in pixels
-    pub position: (f32, f32, f32),
-    /// The color of your object, A.K.A. albedo sometimes
-    pub color: crate::uniform_type::Array4,
     /// Should it be affected by camera?
     pub camera_effect: bool,
     /// Shader Settings
@@ -110,18 +142,13 @@ pub struct ObjectSettings {
 impl Default for ObjectSettings {
     fn default() -> Self {
         Self {
-            name: "Object!",
-            size: (100f32, 100f32, 100f32),
-            scale: (1f32, 1f32, 1f32),
-            position: (0f32, 0f32, 0f32),
-            color: crate::uniform_type::Array4 {
-                data: crate::utils::default_resources::DEFAULT_COLOR,
-            },
             camera_effect: true,
             shader_settings: ShaderSettings::default(),
         }
     }
 }
+unsafe impl Send for ObjectSettings {}
+unsafe impl Sync for ObjectSettings {}
 
 /// The engine is the main starting point of using the Blue Engine. Everything that runs on Blue Engine will be under this struct.
 /// The structure of engine is monolithic, but the underlying data and the way it works is not.
@@ -153,55 +180,90 @@ impl Default for ObjectSettings {
 pub struct Engine {
     /// The renderer does exactly what it is called. It works with the GPU to render frames according to the data you gave it.
     pub renderer: Renderer,
-    // The event_loop handles the events of the window and inputs, so it's used internally
+    /// The event_loop handles the events of the window and inputs, so it's used internally
     pub event_loop: winit::event_loop::EventLoop<()>,
     /// The window handles everything about window and inputs. This includes ability to modify window and listen to input devices for changes.
     pub window: winit::window::Window,
     /// The object system is a way to make it easier to work with the engine. Obviously you can work without it, but it's for those who
     /// do not have the know-how, or wish to handle all the work of rendering data manually.
-    pub objects: std::collections::HashMap<&'static str, Object>,
+    pub objects: ObjectStorage,
     /// The camera handles the way the scene looks when rendered. You can modify everything there is to camera through this.
     pub camera: Camera,
     /// Handles all engine plugins
     pub plugins: Vec<Box<dyn crate::EnginePlugin>>,
 }
+unsafe impl Send for Engine {}
+unsafe impl Sync for Engine {}
 
 /// Container for pipeline values. Each pipeline takes only 1 vertex shader, 1 fragment shader, 1 texture data, and optionally a vector of uniform data.
+#[derive(Debug)]
 pub struct Pipeline {
-    pub shader: crate::Shaders,
-    pub vertex_buffer: VertexBuffers,
-    pub texture: crate::Textures,
-    pub uniform: Option<crate::UniformBuffers>,
+    /// the shader buffer that's sent to the gpu
+    pub shader: PipelineData<crate::Shaders>,
+    /// The vertex buffer that's sent to the gpu. This includes indices as well
+    pub vertex_buffer: PipelineData<VertexBuffers>,
+    /// The texture that's sent to the gpu.
+    pub texture: PipelineData<crate::Textures>,
+    /// the Uniform buffers that are sent to the gpu
+    pub uniform: PipelineData<Option<crate::UniformBuffers>>,
+}
+unsafe impl Send for Pipeline {}
+unsafe impl Sync for Pipeline {}
+
+/// Container for pipeline data. Allows for sharing resources with other objects
+#[derive(Debug)]
+pub enum PipelineData<T> {
+    /// No data, just a reference to a buffer
+    Copy(String),
+    /// The actual data
+    Data(T),
 }
 
 /// Container for vertex and index buffer
+#[derive(Debug)]
 pub struct VertexBuffers {
     /// An array of vertices. A vertex is a point in 3D space containing an X, Y, and a Z coordinate between -1 and +1
     pub vertex_buffer: wgpu::Buffer,
     /// An array of indices. Indices are a way to reuse vertices, this in turn helps greatly in reduction of amount of vertices needed to be sent to the GPU
     pub index_buffer: wgpu::Buffer,
+    /// The length of the vertex buffer
     pub length: u32,
 }
+unsafe impl Send for VertexBuffers {}
+unsafe impl Sync for VertexBuffers {}
 
-// Main renderer class. this will contain all methods and data related to the renderer
+/// Main renderer class. this will contain all methods and data related to the renderer
+#[derive(Debug)]
 pub struct Renderer {
+    /// A [`wgpu::Surface`] represents a platform-specific surface (e.g. a window) onto which rendered images may be presented.
     pub surface: Option<wgpu::Surface>,
+    /// Context for all of the gpu objects
     #[cfg(feature = "android")]
     pub instance: wgpu::Instance,
+    /// Handle to a physical graphics and/or compute device.
     #[allow(unused)]
     pub adapter: wgpu::Adapter,
+    /// Open connection to a graphics and/or compute device.
     pub device: wgpu::Device,
+    /// Handle to a command queue on a device.
     pub queue: wgpu::Queue,
+    /// Describes a [`wgpu::Surface`]
     pub config: wgpu::SurfaceConfiguration,
+    /// The size of the window
     pub size: winit::dpi::PhysicalSize<u32>,
+    /// The texture bind group layout
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
+    /// The uniform bind group layout
     pub default_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    /// The depth buffer, used to render object depth
     pub depth_buffer: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
+    /// The default data used within the renderer
     pub default_data: Option<(crate::Textures, crate::Shaders, crate::UniformBuffers)>,
+    /// The camera used in the engine
     pub camera: Option<crate::UniformBuffers>,
-    pub custom_render_pass:
-        Option<Box<dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView) + 'static>>,
 }
+unsafe impl Sync for Renderer {}
+unsafe impl Send for Renderer {}
 
 /// Descriptor and settings for a window.
 #[derive(Debug, Clone, Copy)]
@@ -218,6 +280,8 @@ pub struct WindowDescriptor {
     pub resizable: bool,
     /// Define how much power should the app ask for
     pub power_preference: crate::PowerPreference,
+    /// The backend to use for the draw
+    pub backends: crate::Backends,
 }
 impl std::default::Default for WindowDescriptor {
     /// Will quickly create a window with default settings
@@ -229,8 +293,30 @@ impl std::default::Default for WindowDescriptor {
             decorations: true,
             resizable: true,
             power_preference: crate::PowerPreference::LowPower,
+            backends: crate::Backends::all(),
         }
     }
+}
+unsafe impl Send for WindowDescriptor {}
+unsafe impl Sync for WindowDescriptor {}
+
+/// Container for the projection used by the camera
+#[derive(Debug)]
+pub enum Projection {
+    /// Perspective projection
+    ///
+    /// This is the default project used by the video games and majority of graphics
+    Perspective {
+        /// The field of view
+        fov: f32,
+    },
+    /// Orthographic projection
+    ///
+    /// This projection gives you a 2D view of the scene
+    Orthographic {
+        /// The size of the view
+        zoom: f32,
+    },
 }
 
 /// Container for the camera feature. The settings here are needed for
@@ -241,10 +327,12 @@ pub struct Camera {
     pub position: nalgebra_glm::Vec3,
     /// The target at which the camera should be looking
     pub target: nalgebra_glm::Vec3,
+    /// The up vector of the camera. This defines the elevation of the camera
     pub up: nalgebra_glm::Vec3,
+    /// The resolution of the camera view
     pub resolution: (f32, f32),
-    /// The field of view of the camera
-    pub fov: f32,
+    /// The projection of the camera
+    pub projection: Projection,
     /// The closest view of camera
     pub near: f32,
     /// The furthest view of camera
@@ -253,19 +341,15 @@ pub struct Camera {
     pub view_data: nalgebra_glm::Mat4,
     // For checking and rebuilding it's uniform buffer
     pub(crate) changed: bool,
-    pub(crate) uniform_data: crate::UniformBuffers,
+    /// The uniform data of the camera to be sent to the gpu
+    pub uniform_data: crate::UniformBuffers,
+    /// The position and target of the camera
     pub(crate) add_position_and_target: bool,
 }
+unsafe impl Send for Camera {}
+unsafe impl Sync for Camera {}
 
-pub struct LightManager {
-    pub ambient_color: crate::uniform_type::Array4,
-    pub ambient_strength: f32,
-    pub affected_objects: Vec<&'static str>,
-    pub light_objects:
-        std::collections::BTreeMap<&'static str, ([f32; 3], crate::uniform_type::Array4)>,
-}
-
-// ? These definitions are taken from wgpu API docs
+/// These definitions are taken from wgpu API docs
 #[derive(Debug, Clone, Copy)]
 pub struct ShaderSettings {
     // ===== PRIMITIVE ===== //
@@ -330,28 +414,51 @@ impl Default for ShaderSettings {
             conservative: false,
             count: 1,
             mask: !0,
-            alpha_to_coverage_enabled: false,
+            alpha_to_coverage_enabled: true,
         }
     }
+}
+unsafe impl Send for ShaderSettings {}
+unsafe impl Sync for ShaderSettings {}
+
+/// Instance buffer data that is sent to GPU
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceRaw {
+    /// The transformation matrix of the instance
+    pub model: uniform_type::Matrix,
+}
+
+/// Instance buffer data storage
+#[derive(Debug, Clone, Copy)]
+pub struct Instance {
+    /// The position of the instance
+    pub position: nalgebra_glm::Vec3,
+    /// The rotation of the instance
+    pub rotation: nalgebra_glm::Vec3,
+    /// The scale of the instance
+    pub scale: nalgebra_glm::Vec3,
 }
 
 /// Allows all events to be fetched directly, making it easier to add custom additions to the engine.
 pub trait EnginePlugin: Any {
+    /// This is ran before any of the render events, it's generally used to capture raw input.
     fn update_events(
         &mut self,
         _renderer: &mut crate::Renderer,
         _window: &crate::Window,
-        _objects: &mut std::collections::HashMap<&'static str, crate::Object>,
+        _objects: &mut ObjectStorage,
         _events: &crate::Event<()>,
         _input: &crate::InputHelper,
         _camera: &mut crate::Camera,
     );
 
+    /// ran after an update loop code is done on each frame
     fn update(
         &mut self,
         _renderer: &mut crate::Renderer,
         _window: &crate::Window,
-        _objects: &mut std::collections::HashMap<&'static str, crate::Object>,
+        _objects: &mut ObjectStorage,
         _camera: &mut crate::Camera,
         _input: &crate::InputHelper,
         _encoder: &mut crate::CommandEncoder,
@@ -360,19 +467,31 @@ pub trait EnginePlugin: Any {
 }
 downcast!(dyn EnginePlugin);
 
+/// Defines how the rotation axis is
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotateAxis {
+    #[doc(hidden)]
     X,
+    #[doc(hidden)]
     Y,
+    #[doc(hidden)]
     Z,
 }
+unsafe impl Send for RotateAxis {}
+unsafe impl Sync for RotateAxis {}
 
+/// Defines how the texture data is
 #[derive(Debug, Clone)]
 pub enum TextureData {
+    /// the texture file bytes directly
     Bytes(Vec<u8>),
+    /// the texture as a [`image::DynamicImage`]
     Image(image::DynamicImage),
-    Path(&'static str),
+    /// path to a texture file to load
+    Path(String),
 }
+unsafe impl Send for TextureData {}
+unsafe impl Sync for TextureData {}
 
 /// Defines how the borders of texture would look like
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,17 +503,11 @@ pub enum TextureMode {
     /// Repeats the texture, but mirrors it on edges
     MirrorRepeat,
 }
-
-/// Defines file format of the texture to load
-pub enum TextureFormat {
-    PNG,
-    BMP,
-    JPEG,
-    PNM,
-}
+unsafe impl Send for TextureMode {}
+unsafe impl Sync for TextureMode {}
 
 /// This function helps in converting pixel value to the value that is between -1 and +1
-pub fn normalize(value: f32, max: u32) -> f32 {
+pub fn pixel_to_cartesian(value: f32, max: u32) -> f32 {
     let mut result = value / max as f32;
 
     if value == max as f32 {
@@ -409,9 +522,51 @@ pub fn normalize(value: f32, max: u32) -> f32 {
     }
 }
 
-/// Returns
-pub fn percentage(amount: f32, of: f32) -> f32 {
-    let result = amount / of;
-
-    return result;
+/// A unified way to handle strings
+pub trait StringBuffer: StringBufferTrait + Clone {}
+/// A trait for [StringBuffer]
+pub trait StringBufferTrait {
+    /// Returns the string as &[`str`]
+    fn as_str(&self) -> &str;
+    /// Returns the string as [`String`]
+    fn as_string(&self) -> String;
 }
+
+impl StringBufferTrait for String {
+    fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+    fn as_string(&self) -> String {
+        self.clone()
+    }
+}
+impl StringBuffer for String {}
+impl StringBufferTrait for &str {
+    fn as_str(&self) -> &str {
+        self
+    }
+    fn as_string(&self) -> String {
+        self.to_string()
+    }
+}
+impl StringBuffer for &str {}
+
+/// A unified way to handle objects
+///
+/// This is a container for objects that is used to apply different operations on the objects at the same time.
+/// It can deref to the object hashmap itself when needed.
+#[derive(Debug)]
+pub struct ObjectStorage(std::collections::HashMap<String, Object>);
+impl ObjectStorage {
+    /// Creates a new object storage
+    pub fn new() -> Self {
+        ObjectStorage(std::collections::HashMap::new())
+    }
+}
+unsafe impl Send for ObjectStorage {}
+unsafe impl Sync for ObjectStorage {}
+
+impl_deref!(ObjectStorage, std::collections::HashMap<String, Object>);
+
+/// Depth format
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;

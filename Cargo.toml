@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 blue_engine = { path = "./blue_engine" }
+blue_engine_utilities = { path = "./blue_engine_utilities" }
 
 [profile.release]
 opt-level = 3

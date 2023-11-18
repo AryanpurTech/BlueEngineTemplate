@@ -7,14 +7,20 @@
 */
 
 use blue_engine::{
-    header::{Engine, ObjectSettings, WindowDescriptor},
+    header::{Engine, ObjectSettings},
     primitive_shapes::triangle,
 };
 
 pub fn main() {
-    let mut engine = Engine::new(WindowDescriptor::default()).expect("win");
+    let mut engine = Engine::new().expect("win");
 
-    triangle("Triangle", ObjectSettings::default(), &mut engine).unwrap();
+    triangle(
+        "Triangle",
+        ObjectSettings::default(),
+        &mut engine.renderer,
+        &mut engine.objects,
+    )
+    .unwrap();
 
     engine
         .update_loop(move |_, _, _, _, _, _| {})

@@ -4,7 +4,10 @@
  * The license is same as the one on the root.
 */
 
-use crate::header::{Camera, Engine, Object, Renderer, WindowDescriptor};
+use crate::{
+    header::{Camera, Engine, Renderer, WindowDescriptor},
+    ObjectStorage,
+};
 
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
@@ -13,9 +16,19 @@ use winit::{
 };
 
 impl Engine {
+    /// Creates a new window in current thread using default settings.
+    pub fn new() -> anyhow::Result<Self> {
+        Self::new_inner(WindowDescriptor::default())
+    }
+
+    /// Creates a new window in current thread using provided settings.
+    pub fn new_config(settings: WindowDescriptor) -> anyhow::Result<Self> {
+        Self::new_inner(settings)
+    }
+
     /// Creates a new window in current thread.
     #[allow(unreachable_code)]
-    pub fn new(settings: WindowDescriptor) -> anyhow::Result<Self> {
+    pub(crate) fn new_inner(settings: WindowDescriptor) -> anyhow::Result<Self> {
         #[cfg(feature = "debug")]
         env_logger::init();
         // Dimentions of the window, as width and height
@@ -45,13 +58,16 @@ impl Engine {
 
         // bind the loop to window
         #[cfg(not(feature = "android"))]
-        let window = new_window.build(&event_loop).unwrap();
+        let window = new_window.build(&event_loop)?;
         #[cfg(feature = "android")]
         let window = Window::new(&event_loop).unwrap();
 
         // The renderer init on current window
-        let mut renderer =
-            futures::executor::block_on(Renderer::new(&window, settings.power_preference))?;
+        let mut renderer = futures::executor::block_on(Renderer::new(
+            &window,
+            settings.power_preference,
+            settings.backends,
+        ))?;
 
         let camera = Camera::new(window.inner_size(), &mut renderer)?;
 
@@ -59,7 +75,7 @@ impl Engine {
             window,
             event_loop,
             renderer,
-            objects: std::collections::HashMap::new(),
+            objects: ObjectStorage::new(),
             camera,
             plugins: vec![],
         })
@@ -77,7 +93,7 @@ impl Engine {
                 // Core
                 &mut Renderer,
                 &mut Window,
-                &mut std::collections::HashMap<&'static str, Object>,
+                &mut ObjectStorage,
                 &winit_input_helper::WinitInputHelper,
                 &mut Camera,
                 &mut Vec<Box<dyn crate::EnginePlugin>>,
@@ -92,7 +108,7 @@ impl Engine {
             mut window,
             mut objects,
             mut camera,
-            mut plugins
+            mut plugins,
         } = self;
 
         // and get input events to handle them later
